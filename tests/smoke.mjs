@@ -21,6 +21,7 @@
  */
 
 import { strict as assert } from 'node:assert'
+import { createServer } from 'node:http'
 import { A2aServer, silentLogger } from '../lib/server.js'
 import { buildAgentCard } from '../lib/protocol.js'
 import { A2aClient, matchesAllowlist } from '../lib/client.js'
@@ -175,6 +176,49 @@ async function collectSse(response, onEvent) {
     }
   }
   return events
+}
+
+/**
+ * 捕获出站 JSON-RPC 请求体的最小假服务器：
+ * - POST 到根路径 → 记录解析后的 body，按 handler 返回 result；
+ * - GET 卡片路径 → 返回 setCard 提供的卡片。
+ * 用于断言 A2aClient 实际发出的 message.metadata 与卡片解析行为。
+ */
+async function startCapture(handler) {
+  const messages = []
+  let card = null
+  const server = createServer((req, res) => {
+    let body = ''
+    req.on('data', (chunk) => { body += chunk })
+    req.on('end', () => {
+      if (req.method === 'GET') {
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify(card))
+        return
+      }
+      const parsed = JSON.parse(body)
+      messages.push(parsed)
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ jsonrpc: '2.0', id: parsed.id, result: handler(parsed) }))
+    })
+  })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const url = `http://127.0.0.1:${server.address().port}/`
+  return {
+    url,
+    messages,
+    setCard: (value) => { card = value },
+    close: () => new Promise((resolve) => server.close(resolve)),
+  }
+}
+
+function completedTask() {
+  return {
+    kind: 'task',
+    id: 'inline',
+    contextId: 'inline',
+    status: { state: 'completed', timestamp: new Date().toISOString() },
+  }
 }
 
 // ── 主流程 ─────────────────────────────────────────────────────────────
@@ -467,6 +511,72 @@ const main = async () => {
     assert.match(text, /^echo: stream call \(#1\)$/)
     assert.ok(seen.includes('status-update'), `事件应含 status-update: ${seen}`)
     assert.ok(seen.includes('artifact-update'), `事件应含 artifact-update: ${seen}`)
+  })
+
+  await test('A2aClient.send：默认 metadata.kind=message，未配置 peerName 时不含 from', async () => {
+    const fake = await startCapture(() => completedTask())
+    try {
+      const captureClient = new A2aClient({ baseUrl: fake.url, timeoutMs: 5000 })
+      await captureClient.send('metadata default')
+      const metadata = fake.messages[0].params.message.metadata
+      assert.equal(metadata.kind, 'message')
+      assert.equal('from' in metadata, false)
+    } finally {
+      await fake.close()
+    }
+  })
+
+  await test('A2aClient：peerName 写入 metadata.from，kind 选项透传', async () => {
+    const fake = await startCapture(() => completedTask())
+    try {
+      const captureClient = new A2aClient({ baseUrl: fake.url, peerName: 'dsh-peer', timeoutMs: 5000 })
+      await captureClient.send('request it', { kind: 'request' })
+      assert.deepEqual(fake.messages[0].params.message.metadata, { kind: 'request', from: 'dsh-peer' })
+    } finally {
+      await fake.close()
+    }
+  })
+
+  await test('A2aClient.sendStream：metadata 携带 from/kind', async () => {
+    const fake = await startCapture(() => completedTask())
+    try {
+      const captureClient = new A2aClient({ baseUrl: fake.url, peerName: 'dsh-peer', timeoutMs: 5000 })
+      await captureClient.sendStream('stream metadata', () => {}, { kind: 'result' })
+      assert.deepEqual(fake.messages[0].params.message.metadata, { kind: 'result', from: 'dsh-peer' })
+    } finally {
+      await fake.close()
+    }
+  })
+
+  await test('A2aClient.card：接受 v1.0 supportedInterfaces 形态（无顶层 url）', async () => {
+    const fake = await startCapture(() => completedTask())
+    try {
+      fake.setCard({
+        name: 'v1-peer',
+        description: 'v1 card',
+        version: '1.0.0',
+        supportedInterfaces: [{ url: 'http://127.0.0.1:9999/rpc', protocolBinding: 'JSONRPC', protocolVersion: '1.0' }],
+        capabilities: { streaming: false, pushNotifications: true, stateTransitionHistory: false },
+        skills: [],
+      })
+      const captureClient = new A2aClient({ baseUrl: fake.url, timeoutMs: 5000 })
+      const card = await captureClient.card()
+      assert.equal(card.url, 'http://127.0.0.1:9999/rpc')
+      assert.equal(card.name, 'v1-peer')
+    } finally {
+      await fake.close()
+    }
+  })
+
+  await test('A2aClient.card：url 与 supportedInterfaces 都缺失时报明确错误', async () => {
+    const fake = await startCapture(() => completedTask())
+    try {
+      fake.setCard({ name: 'broken', version: '1.0.0' })
+      const captureClient = new A2aClient({ baseUrl: fake.url, timeoutMs: 5000 })
+      await assert.rejects(() => captureClient.card(), /url|supportedInterfaces/i)
+    } finally {
+      await fake.close()
+    }
   })
 
   await test('A2aClient.getTask / cancelTask 错误映射', async () => {

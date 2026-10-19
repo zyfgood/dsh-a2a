@@ -60,6 +60,11 @@ export interface Config {
   bearerToken?: string
   /** Agent Card 中的名称。 */
   agentName?: string
+  /**
+   * 本端 peer 名：出站消息写入 `metadata.from`，供对端把回话路由回来。
+   * 缺省回退 agentName。
+   */
+  peerName?: string
   /** Agent Card 中的描述。 */
   agentDescription?: string
   /** Agent Card 中的版本号（agent 自身版本，默认 1.0.0）。 */
@@ -107,6 +112,7 @@ export const Config: z<Config> = z.object({
   publicUrl: z.string(),
   bearerToken: z.string(),
   agentName: z.string().default('DSH Agent'),
+  peerName: z.string(),
   agentDescription: z.string().default('由 DeepSeek Harness（DSH）驱动的 A2A agent：可执行编码、分析、文件处理等完整 agent 能力。'),
   agentVersion: z.string().default('1.0.0'),
   skills: z.array(z.object({
@@ -209,9 +215,11 @@ export function apply(ctx: Context, config: Config): void {
 
   // 出站工具：让本 profile 的 agent 能呼叫远端 A2A agent。
   if (config.tools !== false) {
+    const peerName = config.peerName ?? config.agentName ?? 'DSH Agent'
     registerA2aTools(ctx, {
       allowPatterns: config.clientAllowPatterns ?? ['*'],
       timeoutMs: config.clientTimeoutMs ?? 120_000,
+      peerName,
     })
   }
 }

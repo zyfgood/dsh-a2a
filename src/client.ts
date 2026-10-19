@@ -29,7 +29,20 @@ export interface A2aClientOptions {
   bearerToken?: string
   /** 单次 HTTP 请求 / 轮询总超时（ms，默认 120s）。 */
   timeoutMs?: number
+  /**
+   * 本端 peer 名：写入出站消息 `metadata.from`，供对端把回话路由回来。
+   * 未配置（或为空串）时不携带 `from`，回退为旧行为。
+   */
+  peerName?: string
 }
+
+/**
+ * 出站消息的 `metadata.kind`：
+ * - `message` 仅入库/通知（默认，兼容旧行为）；
+ * - `request` 触发对端处理并等待结果；
+ * - `result` 回执/结果投递。
+ */
+export type A2aOutboundKind = 'message' | 'request' | 'result'
 
 /** JSON-RPC 远端返回的错误。 */
 export class A2aRpcError extends Error {
@@ -72,6 +85,18 @@ export class A2aClient {
       cardUrl: (wellKnown: string) => `${origin}${wellKnown}`,
     }
     return this.base
+  }
+
+  /**
+   * 构造出站消息的 metadata：始终带 `kind`（默认 message），
+   * 配置了本端 peerName 时附带 `from`（对端据此路由回话）。
+   */
+  private messageMetadata(kind: A2aOutboundKind = 'message'): Record<string, unknown> {
+    const peerName = this.options.peerName
+    return {
+      kind,
+      ...(peerName !== undefined && peerName !== '' ? { from: peerName } : {}),
+    }
   }
 
   private headers(extra?: Record<string, string>): Record<string, string> {
@@ -130,11 +155,14 @@ export class A2aClient {
           continue
         }
         const card = (await response.json()) as AgentCard
-        if (typeof card.url === 'string') {
-          this.cachedCard = card
-          return card
+        const url = resolveCardUrl(card)
+        if (url !== undefined) {
+          // v1.0 卡片可能只有 supportedInterfaces；补齐顶层 url 供本客户端统一使用。
+          const normalized = url === card.url ? card : { ...card, url }
+          this.cachedCard = normalized
+          return normalized
         }
-        lastError = new A2aRpcError(-1, `GET ${attempt.url} 返回的卡片缺少 url 字段`)
+        lastError = new A2aRpcError(-1, `GET ${attempt.url} 返回的卡片缺少 url（顶层 url 与 supportedInterfaces[].url 均未提供）`)
       } catch (error) {
         lastError = error
       }
@@ -152,6 +180,8 @@ export class A2aClient {
     contextId?: string
     pollMs?: number
     onEvent?: (event: TaskEvent) => void
+    /** 出站 metadata.kind（默认 message）。 */
+    kind?: A2aOutboundKind
   }): Promise<A2aTask> {
     const messageId = crypto.randomUUID()
     const result = await this.rpc<A2aTask | { kind: 'message' }>('message/send', {
@@ -160,6 +190,7 @@ export class A2aClient {
         role: 'user',
         parts: [{ kind: 'text', text }],
         messageId,
+        metadata: this.messageMetadata(options?.kind),
         ...(options?.contextId !== undefined ? { contextId: options.contextId } : {}),
       },
     })
@@ -200,6 +231,8 @@ export class A2aClient {
    */
   async sendStream(text: string, onEvent: (event: TaskEvent) => void, options?: {
     contextId?: string
+    /** 出站 metadata.kind（默认 message）。 */
+    kind?: A2aOutboundKind
   }): Promise<TaskEvent[]> {
     const messageId = crypto.randomUUID()
     const body = JSON.stringify({
@@ -212,6 +245,7 @@ export class A2aClient {
           role: 'user',
           parts: [{ kind: 'text', text }],
           messageId,
+          metadata: this.messageMetadata(options?.kind),
           ...(options?.contextId !== undefined ? { contextId: options.contextId } : {}),
         },
       },
@@ -294,11 +328,16 @@ export class A2aClient {
     pollMs?: number
     preferStream?: boolean
     onEvent?: (event: TaskEvent) => void
+    /** 出站 metadata.kind（默认 message）。 */
+    kind?: A2aOutboundKind
   }): Promise<{ task: A2aTask; text: string }> {
     if (options?.preferStream) {
       const card = await this.card().catch(() => undefined)
       if (card === undefined || card.capabilities?.streaming) {
-        const events = await this.sendStream(text, (e) => options.onEvent?.(e), { contextId: options.contextId })
+        const events = await this.sendStream(text, (e) => options.onEvent?.(e), {
+          contextId: options.contextId,
+          ...(options.kind !== undefined ? { kind: options.kind } : {}),
+        })
         const task = taskFromEvents(events)
         return { task, text: artifactTextFromEvents(events) }
       }
@@ -312,6 +351,22 @@ export class A2aClient {
     }
     return { task, text: out.join('\n').trim() }
   }
+}
+
+/**
+ * 解析卡片的服务地址：优先顶层 `url`（0.2/0.3 形态），缺失时回退
+ * A2A v1.0 的 `supportedInterfaces[]`（取首个带 url 的接口，优先 JSONRPC）。
+ */
+function resolveCardUrl(card: AgentCard): string | undefined {
+  if (typeof card.url === 'string' && card.url !== '') return card.url
+  const interfaces = card.supportedInterfaces
+  if (Array.isArray(interfaces)) {
+    const usable = interfaces.filter((entry) => entry !== null && typeof entry === 'object' && typeof entry.url === 'string' && entry.url !== '')
+    const preferred = usable.find((entry) => String(entry.protocolBinding ?? '').toUpperCase() === 'JSONRPC')
+    const chosen = preferred ?? usable[0]
+    if (chosen !== undefined) return chosen.url
+  }
+  return undefined
 }
 
 function isTerminal(task: A2aTask): boolean {

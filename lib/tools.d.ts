@@ -11,5 +11,7 @@ import type { Context } from '@deepseek-ai/cordis';
 export declare function registerA2aTools(ctx: Context, options: {
     allowPatterns: readonly string[];
     timeoutMs: number;
+    /** 本端 peer 名：写入出站消息 metadata.from，供对端路由回话。 */
+    peerName?: string;
 }): void;
 //# sourceMappingURL=tools.d.ts.map

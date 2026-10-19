@@ -21,7 +21,19 @@ export interface A2aClientOptions {
     bearerToken?: string;
     /** 单次 HTTP 请求 / 轮询总超时（ms，默认 120s）。 */
     timeoutMs?: number;
+    /**
+     * 本端 peer 名：写入出站消息 `metadata.from`，供对端把回话路由回来。
+     * 未配置（或为空串）时不携带 `from`，回退为旧行为。
+     */
+    peerName?: string;
 }
+/**
+ * 出站消息的 `metadata.kind`：
+ * - `message` 仅入库/通知（默认，兼容旧行为）；
+ * - `request` 触发对端处理并等待结果；
+ * - `result` 回执/结果投递。
+ */
+export type A2aOutboundKind = 'message' | 'request' | 'result';
 /** JSON-RPC 远端返回的错误。 */
 export declare class A2aRpcError extends Error {
     readonly code: number;
@@ -35,6 +47,11 @@ export declare class A2aClient {
     constructor(options: A2aClientOptions);
     /** 规范化基地址：容忍带 card 路径 / JSON-RPC 路径的输入。 */
     private normalize;
+    /**
+     * 构造出站消息的 metadata：始终带 `kind`（默认 message），
+     * 配置了本端 peerName 时附带 `from`（对端据此路由回话）。
+     */
+    private messageMetadata;
     private headers;
     private rpc;
     /** 拉取远端 Agent Card（带进程内缓存）。 */
@@ -49,6 +66,8 @@ export declare class A2aClient {
         contextId?: string;
         pollMs?: number;
         onEvent?: (event: TaskEvent) => void;
+        /** 出站 metadata.kind（默认 message）。 */
+        kind?: A2aOutboundKind;
     }): Promise<A2aTask>;
     /**
      * message/stream：SSE 消费直到 final 事件；返回收到的全部事件。
@@ -56,6 +75,8 @@ export declare class A2aClient {
      */
     sendStream(text: string, onEvent: (event: TaskEvent) => void, options?: {
         contextId?: string;
+        /** 出站 metadata.kind（默认 message）。 */
+        kind?: A2aOutboundKind;
     }): Promise<TaskEvent[]>;
     getTask(taskId: string): Promise<A2aTask>;
     cancelTask(taskId: string): Promise<A2aTask>;
@@ -65,6 +86,8 @@ export declare class A2aClient {
         pollMs?: number;
         preferStream?: boolean;
         onEvent?: (event: TaskEvent) => void;
+        /** 出站 metadata.kind（默认 message）。 */
+        kind?: A2aOutboundKind;
     }): Promise<{
         task: A2aTask;
         text: string;

@@ -52,6 +52,11 @@ export interface Config {
     bearerToken?: string;
     /** Agent Card 中的名称。 */
     agentName?: string;
+    /**
+     * 本端 peer 名：出站消息写入 `metadata.from`，供对端把回话路由回来。
+     * 缺省回退 agentName。
+     */
+    peerName?: string;
     /** Agent Card 中的描述。 */
     agentDescription?: string;
     /** Agent Card 中的版本号（agent 自身版本，默认 1.0.0）。 */

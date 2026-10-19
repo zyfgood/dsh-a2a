@@ -96,6 +96,7 @@ profile 的 `cordis.patch.yml`（或本包 `cordis.patch.yml` 默认层）：
 | `publicUrl` | 按监听地址推导 | 写入 Agent Card 的 `url`；反代/TLS 部署时必须配置为外部可达地址 |
 | `bearerToken` | 无 | Bearer 鉴权令牌，支持 `env:VAR`；配置后卡片宣告 `bearerAuth` |
 | `agentName` / `agentDescription` / `agentVersion` | `DSH Agent` / … | Agent Card 元信息 |
+| `peerName` | 同 `agentName` | 本端 peer 名：出站消息写入 `metadata.from`，供对端把回话路由回来 |
 | `skills` | 内置一条 dsh-agent 技能 | Agent Card 技能清单 |
 | `mode` | `agent` | 入站处理模式：`agent` / `llm` / `echo`（见下） |
 | `provider` / `model` | — | 模型来源：`llm` 模式直答，`agent` 模式创建会话时写入；未配置时回退宿主默认模型（GUI 的默认模型，即 profile 的 `agent-default-model` 分节） |
@@ -123,7 +124,7 @@ profile 的 `cordis.patch.yml`（或本包 `cordis.patch.yml` 默认层）：
 | 工具 | 对应协议方法 | 用途 |
 |---|---|---|
 | `a2a_discover` | `GET /.well-known/agent-card.json` | 拉取远端 Agent Card（能力/技能/鉴权） |
-| `a2a_send` | `message/stream`（自动降级 `message/send` + 轮询） | 发消息并等待远端最终回复 |
+| `a2a_send` | `message/stream`（自动降级 `message/send` + 轮询） | 发消息并等待远端最终回复；`kind` 参数（`message`/`request`/`result`，默认 `message`）对应出站 `metadata.kind` |
 | `a2a_task_status` | `tasks/get` | 查询远端任务状态 |
 | `a2a_cancel` | `tasks/cancel` | 取消远端任务 |
 
@@ -133,7 +134,7 @@ profile 的 `cordis.patch.yml`（或本包 `cordis.patch.yml` 默认层）：
 
 ```bash
 pnpm verify   # 本地 typecheck（shims/ 提供 @deepseek-ai 结构类型）
-pnpm test     # 构建 DSH 无关核心 + 35 项端到端冒烟测试
+pnpm test     # 构建 DSH 无关核心 + 40 项端到端冒烟测试
 pnpm build:local  # 本地全量构建 lib/（shims 类型校验，产物与宿主构建一致）
 pnpm build    # 完整构建（需要宿主环境提供 @deepseek-ai/* peer 依赖）
 ```
@@ -159,6 +160,8 @@ client/
 - `protocol` / `store` / `server` / `client` 不依赖任何 DSH 包，可独立构建与测试；DSH 桥接收敛在 `bridge.ts` / `tools.ts` / `index.ts`。
 - **agent 模式必须有模型**：agent-loop 不自动兜底 provider/model，缺失时提示词组装里的 `{{model}}` 无值，每轮立即报错（表现为「无文本输出」）。插件因此按「配置 provider/model → 回退 `ctx.agentDefaultModel.currentSelection()`」解析，两者都拿不到时直接返回明确的失败说明；本轮若以 `turn/end reason=error` 结束，错误原因会被回给客户端而不是笼统占位符。改 profile 的默认模型后，新建的 A2A 会话即生效（已存在的会话沿用原模型，删 `$DSH_HOME/a2a/context-sessions.json` 条目可重建）。
 - 任务 id 参数：规范写法 `params.id` 与本插件旧约定 `params.taskId` 都接受（`tasks/get` / `tasks/cancel` / `tasks/resubscribe`）。
+- 出站元数据：`message.metadata` 恒带 `kind`（默认 `message`，`a2a_send` 的 `kind` 参数可指定 `request`/`result`）；配置 `peerName` 后附带 `from`，供对端（如 pi-a2a）路由回话。
+- 卡片解析兼容：顶层 `url`（0.2/0.3）与 A2A v1.0 的 `supportedInterfaces[].url` 两种形态都接受，仅 v1.0 形态的卡片也能发现。
 - `input-required` 事件带 `final=true` 关闭当轮 SSE，但任务保持非终态，客户端可凭 `taskId` 续答（续答复用同一任务与 history）。
 - `tasks/cancel` 立即广播 `canceled(final=true)`；agent 模式下正在运行的一轮会在 500ms 轮询粒度感知退出并尽力 `interrupt`，不会阻塞后续轮次。
 - 与 A2A 0.2.x 客户端的兼容：旧 card 路径照常服务；0.2 客户端不发送版本头时按同版本处理。

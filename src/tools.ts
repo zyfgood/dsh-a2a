@@ -11,6 +11,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { A2aClient, matchesAllowlist } from './client.ts'
+import type { A2aOutboundKind } from './client.ts'
 import type { A2aTask } from './protocol.ts'
 
 // ── 输出类型（字面量 ok 判别，供 render 窄化）─────────────────────────
@@ -65,6 +66,8 @@ export function registerA2aTools(
   options: {
     allowPatterns: readonly string[]
     timeoutMs: number
+    /** 本端 peer 名：写入出站消息 metadata.from，供对端路由回话。 */
+    peerName?: string
   },
 ): void {
   const tools = ctx.get('tools')
@@ -85,7 +88,12 @@ export function registerA2aTools(
   }
 
   const clientFor = (target: string, token?: string): A2aClient =>
-    new A2aClient({ baseUrl: target, timeoutMs: options.timeoutMs, ...(token ? { bearerToken: token } : {}) })
+    new A2aClient({
+      baseUrl: target,
+      timeoutMs: options.timeoutMs,
+      ...(token ? { bearerToken: token } : {}),
+      ...(options.peerName !== undefined && options.peerName !== '' ? { peerName: options.peerName } : {}),
+    })
 
   // ── a2a_discover：拉取远端 Agent Card ─────────────────────────────
   register(defineTool({
@@ -150,7 +158,7 @@ export function registerA2aTools(
   // ── a2a_send：把消息发给远端 A2A agent 并等待结果 ──────────────────
   register(defineTool({
     name: 'a2a_send',
-    description: '向远端 A2A agent 发送一条文本消息并等待其最终回复（优先流式，自动降级同步+轮询）。适合跨 agent 协作：委托任务、提问、调用其他 agent 的技能。',
+    description: '向远端 A2A agent 发送一条文本消息并等待其最终回复（优先流式，自动降级同步+轮询）。适合跨 agent 协作：委托任务、提问、调用其他 agent 的技能。kind=request 时对端会实际处理并回应（部分实现默认 kind=message 仅入库不触发）。',
     parameters: {
       target: {
         type: 'string',
@@ -160,6 +168,11 @@ export function registerA2aTools(
       content: { type: 'string', required: true, description: '要发送的文本消息（自包含：对方看不到你的上下文）' },
       bearer_token: { type: 'string', description: '远端启用鉴权时的 Bearer 令牌' },
       context_id: { type: 'string', description: 'A2A contextId：同一 id 复用远端会话上下文（多轮对话时传回上一轮返回的值）' },
+      kind: {
+        type: 'string',
+        enum: ['message', 'request', 'result'],
+        description: '消息语义（metadata.kind）：message=仅投递/入库（默认）；request=请求对端处理并等待结果；result=回执/结果投递',
+      },
     },
     output: {
       schema: {
@@ -189,6 +202,7 @@ export function registerA2aTools(
       content: string
       bearer_token?: string
       context_id?: string
+      kind?: A2aOutboundKind
     }): Promise<SendOk | SendFail> => {
       const blocked = checkTarget(args.target)
       if (blocked !== undefined) return { ok: false, detail: blocked }
@@ -196,6 +210,7 @@ export function registerA2aTools(
         const client = clientFor(args.target, args.bearer_token)
         const { task, text } = await client.sendForText(args.content, {
           ...(args.context_id !== undefined && args.context_id !== '' ? { contextId: args.context_id } : {}),
+          ...(args.kind !== undefined ? { kind: args.kind } : {}),
           preferStream: true,
         })
         return {

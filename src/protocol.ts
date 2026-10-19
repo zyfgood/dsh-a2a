@@ -151,10 +151,22 @@ export interface AgentCapabilities {
   readonly stateTransitionHistory: boolean
 }
 
+/** A2A v1.0 卡片接口声明（`supportedInterfaces[]`）。 */
+export interface AgentInterface {
+  readonly url: string
+  readonly protocolBinding?: string
+  readonly protocolVersion?: string
+}
+
 export interface AgentCard {
   readonly name: string
   readonly description?: string
   readonly url: string
+  /**
+   * A2A v1.0 的接口列表形态：部分实现（如 pi-a2a）只给
+   * `supportedInterfaces[].url`，不写顶层 `url`。客户端解析时兼容两种形态。
+   */
+  readonly supportedInterfaces?: readonly AgentInterface[]
   readonly version: string
   readonly protocolVersion: string
   readonly preferredTransport: 'JSONRPC'
