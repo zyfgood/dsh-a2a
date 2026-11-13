@@ -192,7 +192,7 @@ const main = async () => {
     assert.match(response.headers.get('content-type'), /application\/json/)
     const card = await response.json()
     assert.equal(card.name, 'Smoke Agent')
-    assert.equal(card.protocolVersion, '0.3.0')
+    assert.equal(card.protocolVersion, '1.0')
     assert.equal(card.preferredTransport, 'JSONRPC')
     assert.equal(card.capabilities.streaming, true)
     assert.equal(card.capabilities.pushNotifications, false)
@@ -209,7 +209,7 @@ const main = async () => {
 
   await test('版本协商：应答 A2A-Version 头', async () => {
     const response = await fetch(`${base.replace(/\/$/, '')}/.well-known/agent-card.json`)
-    assert.equal(response.headers.get('a2a-version'), '0.3.0')
+    assert.equal(response.headers.get('a2a-version'), '1.0')
   })
 
   await test('版本协商：主版本冲突返回 400', async () => {
@@ -415,11 +415,11 @@ const main = async () => {
   await test('/admin/status：状态摘要', async () => {
     const response = await fetch(`${base.replace(/\/$/, '')}/admin/status`)
     assert.equal(response.status, 200)
-    assert.equal(response.headers.get('a2a-version'), '0.3.0')
+    assert.equal(response.headers.get('a2a-version'), '1.0')
     const status = await response.json()
     assert.equal(status.running, true)
     assert.equal(status.mode, 'agent')
-    assert.equal(status.protocolVersion, '0.3.0')
+    assert.equal(status.protocolVersion, '1.0')
     assert.equal(status.auth, false)
     assert.equal(status.card.name, 'Smoke Agent')
     assert.ok(typeof status.tasks.total === 'number')
@@ -447,7 +447,7 @@ const main = async () => {
   await test('A2aClient.card：发现远端卡片', async () => {
     const card = await client.card()
     assert.equal(card.name, 'Smoke Agent')
-    assert.equal(card.protocolVersion, '0.3.0')
+    assert.equal(card.protocolVersion, '1.0')
   })
 
   await test('A2aClient.sendForText：同步路径', async () => {
