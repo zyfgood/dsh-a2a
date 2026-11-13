@@ -1,21 +1,26 @@
 /**
  * A2A HTTP 服务器：把 TaskStore + 任意 TaskRunner 暴露为标准 A2A 端点。
  *
+ * 1.0 原生：wire 出口默认按 A2A 1.0（`SendMessage` 等方法名、
+ * `TASK_STATE_*` 状态、`ROLE_*` 角色、无 `kind` 的 part、`SendMessageResponse`
+ * 的 `{task}` oneof）。0.3.x 客户端（旧方法名 `message/send`、`X-A2A-Version: 0.3.0`
+ * 头、浏览器端 client 半）仍走旧 wire 形态，由 `negotiateWire()` 逐请求决定。
+ *
  * 端点（默认 http://host:port/）：
- * - `GET  /.well-known/agent-card.json`（0.3.x）与 `/.well-known/agent.json`
- *   （0.2.x 兼容）：返回 Agent Card；
+ * - `GET  /.well-known/agent-card.json` 与 `/.well-known/agent.json`（0.2 兼容）：Agent Card；
  * - `POST /` JSON-RPC 2.0：
- *   - `message/send`        同步执行一轮，返回完结后的 Task；
- *   - `message/stream`      SSE 流：status-update / artifact-update 实时推送；
- *   - `tasks/get`           查询任务快照；
- *   - `tasks/cancel`        取消进行中的任务；
- *   - `tasks/resubscribe`   SSE 回放缓冲事件并继续实时跟随；
+ *   - `SendMessage` / `message/send`            同步执行一轮，返回完结后的任务；
+ *   - `SendStreamingMessage` / `message/stream`   SSE 流：状态/产物实时推送；
+ *   - `GetTask` / `tasks/get`                   查询任务快照；
+ *   - `CancelTask` / `tasks/cancel`             取消进行中的任务；
+ *   - `ListTasks` / `tasks/list`                任务列表（1.0 游标分页 / 0.3 摘要）；
+ *   - `tasks/resubscribe`                       SSE 回放缓冲事件并继续实时跟随；
  *   - `agent/authenticatedExtendedCard`（启用鉴权时）返回扩展卡片；
  *   - `tasks/pushNotificationConfig/*` → -32003（未实现推送通知）。
  *
  * 传输细节：
- * - 所有响应带 `A2A-Version` 头；请求带 `X-A2A-Version`/`A2A-Version` 且
- *   主版本不一致时返回 400（0.3 版本协商）；
+ * - 所有响应带 `A2A-Version: 1.0` 头；请求带 `X-A2A-Version`/`A2A-Version` 且
+ *   主版本不在 {0,1} 时返回 400（2+ 拒绝）；
  * - 可选 Bearer 鉴权（card 中同步宣告 securitySchemes）；
  * - CORS 放开（浏览器端 A2A 客户端直连调试场景）；
  * - 单轮执行有 turnTimeoutMs 上限，超时任务置 failed；
@@ -88,9 +93,16 @@ export declare class A2aServer {
     /** /admin/status 与 /admin/tasks：运维面板数据源（Bearer 门禁同 RPC）。 */
     private serveAdmin;
     private handleRpc;
+    /**
+     * 逐请求判定 wire 形态：
+     * - 方法名是 1.0 原名（SendMessage/SendStreamingMessage/GetTask/CancelTask/ListTasks）→ 'v1'；
+     * - 请求头 A2A-Version/X-A2A-Version 主版本为 1 → 'v1'；
+     * - 其余（旧方法名 + 无头或 0.x 头）→ 'v03'，保持旧响应形态（浏览器半依赖）。
+     */
+    private negotiateWire;
     private checkAuth;
     private readBody;
-    /** 非流式方法的统一分发。 */
+    /** 非流式方法的统一分发。`wire` 决定响应形态（'v1' 原生 / 'v03' 兼容）。 */
     private dispatch;
     private handleSend;
     /**
@@ -107,11 +119,28 @@ export declare class A2aServer {
     private handleGetTask;
     private handleCancel;
     /**
-     * 任务 id 参数：A2A 规范（0.3）用 `params.id`，部分客户端与本插件旧约定
+     * ListTasks（A2A 1.0 新增方法）：返回任务列表，1.0 用原生**游标**分页
+     * （`pageToken` → `nextPageToken`，而不是 offset 语义）。
+     *
+     * - 1.0 wire：`{tasks, nextPageToken, pageSize}`；`nextPageToken` 始终是字符串，
+     *   没有下一页时为空串 `""`（规范要求该字段必须始终出现）；`pageSize` 回显
+     *   实际生效的页大小。`pageToken` 解不出（伪造/损坏/过期/非本 server 签发）
+     *   → -32602 INVALID_PARAMS，绝不静默从头开始（否则客户端会死循环翻页）。
+     * - 旧 wire（tasks/list）：`{tasks: [摘要...]}`，与 /admin/tasks 同形态，
+     *   保持 0.3 行为不变（0.3 没有这套分页字段）。
+     * 无任务时 1.0 返回 `{tasks: [], nextPageToken: '', pageSize}`（不是错误）。
+     */
+    private handleListTasks;
+    /** 1.0 原生游标分页实现（handleListTasks 的 v1 分支）。 */
+    private listTasksV1;
+    /**
+     * 任务 id 参数：A2A 规范用 `params.id`，部分客户端与本插件旧约定
      * 用 `params.taskId`——两者都接受，优先规范写法。
      */
     private taskIdParam;
     private stringParam;
+    /** 数值参数：接受 number 与可解析的字符串；非法一律 undefined（不静默归零）。 */
+    private numberParam;
     private handleStream;
     private handleResubscribe;
     private openSse;
