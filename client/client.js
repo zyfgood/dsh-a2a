@@ -18,7 +18,7 @@
  * 面板不渲染、不报错。
  */
 window.__ModuleLoader__.load({
-  id: 'dsh-a2a',
+  id: '@zyfgood/dsh-a2a',
   factory: (require) => {
     const react = require('react')
     const h = react.createElement
